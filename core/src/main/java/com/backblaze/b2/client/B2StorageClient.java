@@ -265,6 +265,29 @@ public interface B2StorageClient extends Closeable {
             ExecutorService executor) throws B2Exception;
 
     /**
+     * Uploads the specified content source as single part of a B2 large file.
+     *
+     * This method assumes you have already called startLargeFile(). The return value
+     * of that call needs to be passed into this method.
+     *
+     * This method does not finish the file.
+     *
+     * @param fileVersion The B2FileVersion for the large file getting stored.
+     *                    This is the return value of startLargeFile().
+     * @param contentSource The contentSource to upload.
+     * @param uploadListenerOrNull The object that handles upload progress events.
+     *                             This may be null if you do not need to be notified
+     *                             of progress events.
+     * @return The list of String sha1 part checksums
+     * @throws B2Exception If there's trouble.
+     */
+    String storeLargeFilePart(
+            B2FileVersion fileVersion,
+            int partNumber,
+            B2ContentSource contentSource,
+            B2UploadListener uploadListenerOrNull) throws B2Exception;
+
+    /**
      * Stores a large file, where storing each part may involve different behavior
      * or byte sources.
      *

@@ -250,6 +250,23 @@ public class B2StorageClientImpl implements B2StorageClient {
     }
 
     @Override
+    public String storeLargeFilePart(
+            B2FileVersion fileVersion,
+            int partNumber,
+            B2ContentSource contentSource,
+            B2UploadListener uploadListenerOrNull) throws B2Exception {
+
+        return B2LargeFilePartStorer.forLocalContent(
+                fileVersion,
+                contentSource,
+                partNumber,
+                accountAuthCache,
+                webifier,
+                retryer,
+                retryPolicySupplier).storeFilePart(uploadListenerOrNull);
+    }
+
+    @Override
     public B2FileVersion storeLargeFile(
             B2FileVersion fileVersion,
             List<B2PartStorer> partStorers,

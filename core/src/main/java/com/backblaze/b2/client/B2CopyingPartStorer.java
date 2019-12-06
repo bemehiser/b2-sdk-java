@@ -46,7 +46,7 @@ public class B2CopyingPartStorer implements B2PartStorer {
 
     @Override
     public B2Part storePart(
-            B2LargeFileStorer largeFileCreationManager,
+            B2FileStorer largeFileCreationManager,
             B2UploadListener uploadListener) throws B2Exception {
 
         return largeFileCreationManager.copyPart(partNumber, sourceFileId, byteRangeOrNull, uploadListener);

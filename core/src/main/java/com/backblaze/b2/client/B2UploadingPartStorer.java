@@ -43,7 +43,7 @@ public class B2UploadingPartStorer implements B2PartStorer {
 
     @Override
     public B2Part storePart(
-            B2LargeFileStorer largeFileCreationManager,
+            B2FileStorer largeFileCreationManager,
             B2UploadListener uploadListener) throws IOException, B2Exception {
 
         return largeFileCreationManager.uploadPart(partNumber, contentSource, uploadListener);

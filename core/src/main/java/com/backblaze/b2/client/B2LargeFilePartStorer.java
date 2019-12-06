@@ -5,24 +5,13 @@
 package com.backblaze.b2.client;
 
 import com.backblaze.b2.client.contentSources.B2ContentSource;
-import com.backblaze.b2.client.exceptions.B2CannotComputeException;
 import com.backblaze.b2.client.exceptions.B2Exception;
 import com.backblaze.b2.client.exceptions.B2LocalException;
-import com.backblaze.b2.client.structures.B2CopyPartRequest;
-import com.backblaze.b2.client.structures.B2FileVersion;
-import com.backblaze.b2.client.structures.B2FinishLargeFileRequest;
-import com.backblaze.b2.client.structures.B2Part;
-import com.backblaze.b2.client.structures.B2UploadListener;
-import com.backblaze.b2.client.structures.B2UploadPartRequest;
-import com.backblaze.b2.client.structures.B2UploadPartUrlResponse;
-import com.backblaze.b2.client.structures.B2UploadProgress;
-import com.backblaze.b2.client.structures.B2UploadState;
+import com.backblaze.b2.client.structures.*;
 import com.backblaze.b2.util.B2ByteProgressListener;
 import com.backblaze.b2.util.B2ByteRange;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -36,7 +25,7 @@ import java.util.function.Supplier;
  * for a description of the various ways large files can be created
  * and the uses cases supported.
  */
-public class B2LargeFileStorer implements B2FileStorer {
+public class B2LargeFilePartStorer implements B2FileStorer {
 
     /**
      * The B2FileVersion for the large file that is being created.
@@ -46,130 +35,95 @@ public class B2LargeFileStorer implements B2FileStorer {
     /**
      * The parts that need to be stored before finishing the large file.
      */
-    private final List<B2PartStorer> partStorers;
+    private final B2PartStorer partStorer;
 
     /**
      * Stores where each part will begin in the finished large file.
      * Will be set to B2UploadProgress.UNKNOWN_PART_START_BYTE for
      * parts that come after a copied part.
      */
-    private final List<Long> startingBytePositions;
+    private final Long startingBytePositions;
 
     private final B2AccountAuthorizationCache accountAuthCache;
     private final B2UploadPartUrlCache uploadPartUrlCache;
     private final B2StorageClientWebifier webifier;
     private final B2Retryer retryer;
     private final Supplier<B2RetryPolicy> retryPolicySupplier;
-    private final ExecutorService executor;
 
-    B2LargeFileStorer(
+    B2LargeFilePartStorer(
             B2FileVersion fileVersion,
-            List<B2PartStorer> partStorers,
+            B2PartStorer partStorer,
             B2AccountAuthorizationCache accountAuthCache,
             B2StorageClientWebifier webifier,
             B2Retryer retryer,
-            Supplier<B2RetryPolicy> retryPolicySupplier,
-            ExecutorService executor) {
+            Supplier<B2RetryPolicy> retryPolicySupplier) {
 
         this.fileVersion = fileVersion;
-        this.partStorers = validateAndSortPartStorers(new ArrayList<>(partStorers));
-        this.startingBytePositions = computeStartingBytePositions(partStorers);
+        this.partStorer = validatePartStorers(partStorer);
+        this.startingBytePositions = (Long) 0L;
 
         this.accountAuthCache = accountAuthCache;
         this.uploadPartUrlCache = new B2UploadPartUrlCache(webifier, accountAuthCache, fileVersion.getFileId());
         this.webifier = webifier;
         this.retryer = retryer;
         this.retryPolicySupplier = retryPolicySupplier;
-        this.executor = executor;
     }
 
-    private List<B2PartStorer> validateAndSortPartStorers(List<B2PartStorer> partStorers) {
-        partStorers.sort(Comparator.comparingInt(B2PartStorer::getPartNumber));
-
+    private B2PartStorer validatePartStorers(B2PartStorer partStorer) {
         // Go through the parts - throw if there are duplicates or gaps.
-        for (int i = 0; i < partStorers.size(); i++) {
-            final int expectedPartNumber = i + 1;
-            final int partNumber = partStorers.get(i).getPartNumber();
+        final int partNumber = partStorer.getPartNumber();
 
-            if (partNumber < 1) {
-                throw new IllegalArgumentException("invalid part number: " + partNumber);
-            }
-            if (partNumber < expectedPartNumber) {
-                throw new IllegalArgumentException("part number " + partNumber + " has multiple part storers");
-            }
-            if (partNumber > expectedPartNumber) {
-                throw new IllegalArgumentException("part number " + expectedPartNumber + " has no part storers");
-            }
+        if (partNumber < 1) {
+            throw new IllegalArgumentException("invalid part number: " + partNumber);
         }
-
-        return partStorers;
+        return partStorer;
     }
 
-    private static List<Long> computeStartingBytePositions(List<B2PartStorer> partStorers) {
-        final List<Long> startingPositions = new ArrayList<>(partStorers.size());
-
-        long cursor = 0;
-        try {
-            for (final B2PartStorer partStorer : partStorers) {
-                startingPositions.add(cursor);
-                cursor += partStorer.getPartSizeOrThrow();
-            }
-        } catch (B2CannotComputeException e) {
-            while (startingPositions.size() < partStorers.size()) {
-                startingPositions.add(B2UploadProgress.UNKNOWN_PART_START_BYTE);
-            }
-        }
-
-        return startingPositions;
+    B2PartStorer getPartStorer() {
+        return partStorer;
     }
-
-    List<B2PartStorer> getPartStorers() {
-        return partStorers;
-    }
-
 
     /**
      * @return The start byte for the part, or UNKNOWN_PART_START_BYTE if not known.
      */
-    long getStartByteOrUnknown(int partNumber) {
-        return startingBytePositions.get(partNumber - 1);
+    long getStartByteOrUnknown() {
+        return startingBytePositions;
     }
 
-    public static B2LargeFileStorer forLocalContent(
+    public static B2LargeFilePartStorer forLocalContent(
             B2FileVersion largeFileVersion,
             B2ContentSource contentSource,
-            B2PartSizes partSizes,
+            int partNumber,
             B2AccountAuthorizationCache accountAuthCache,
             B2StorageClientWebifier webifier,
             B2Retryer retryer,
-            Supplier<B2RetryPolicy> retryPolicySupplier,
-            ExecutorService executor) throws B2Exception {
+            Supplier<B2RetryPolicy> retryPolicySupplier) throws B2Exception {
 
-        // Convert the contentSource into a list of B2PartStorer objects.
-        final List<B2PartStorer> partContentSources = new ArrayList<>();
+        final B2PartStorer partContentSource;
         try {
-            for (final B2PartSpec partSpec : partSizes.pickParts(contentSource.getContentLength())) {
-                final B2UploadingPartStorer localPartContentSource = new B2UploadingPartStorer(
-                        partSpec.getPartNumber(),
-                        createRangedContentSource(contentSource, partSpec.getStart(), partSpec.getLength()));
-                partContentSources.add(localPartContentSource);
-            }
+            B2PartSpec partSpec = new B2PartSpec(partNumber, 0, contentSource.getContentLength());
+            partContentSource = new B2UploadingPartStorer(
+                    partSpec.getPartNumber(),
+                    createRangedContentSource(contentSource, partSpec.getStart(), partSpec.getLength()));
         } catch (IOException e) {
             throw new B2LocalException("trouble", "exception working with content source" + e, e);
         }
-
         // Instantiate and return the manager.
-        return new B2LargeFileStorer(
+        return new B2LargeFilePartStorer(
                 largeFileVersion,
-                partContentSources,
+                partContentSource,
                 accountAuthCache,
                 webifier,
                 retryer,
-                retryPolicySupplier,
-                executor);
+                retryPolicySupplier);
     }
 
-    B2FileVersion storeFile(B2UploadListener uploadListenerOrNull) throws B2Exception {
+    String storeFilePart(B2UploadListener uploadListenerOrNull) throws B2Exception {
+        B2Part b2Part = storeFileParts(uploadListenerOrNull);
+        return b2Part.getContentSha1();
+    }
+
+    private B2Part storeFileParts(B2UploadListener uploadListenerOrNull) throws B2Exception {
         final B2UploadListener uploadListener;
         if (uploadListenerOrNull == null) {
             uploadListener = B2UploadListener.noopListener();
@@ -177,25 +131,19 @@ public class B2LargeFileStorer implements B2FileStorer {
             uploadListener = uploadListenerOrNull;
         }
 
-        final List<Future<B2Part>> partFutures = new ArrayList<>();
-
-        // Store each part in parallel.
-        for (final B2PartStorer partStorer : partStorers) {
-            partFutures.add(executor.submit(() -> partStorer.storePart(this, uploadListener)));
+        try {
+            return partStorer.storePart(this, uploadListener);
+        } catch (IOException e) {
+            throw new B2LocalException("trouble", "exception working with content source" + e, e);
         }
-
-        return finishLargeFileFromB2PartFutures(fileVersion, partFutures);
     }
 
-    private B2FileVersion finishLargeFileFromB2PartFutures(B2FileVersion largeFileVersion,
-                                                           List<Future<B2Part>> partFutures) throws B2Exception {
+    private String finishLargeFilePartFuture(Future<B2Part> partFuture) throws B2Exception {
 
-        final List<String> partSha1s = new ArrayList<>();
+        final String partSha1;
         try {
-            for (final Future<B2Part> partFuture : partFutures) {
-                final B2Part part = partFuture.get();
-                partSha1s.add(part.getContentSha1());
-            }
+            final B2Part part = partFuture.get();
+            partSha1 = part.getContentSha1();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new B2LocalException("interrupted", "interrupted while trying to copy parts: " + e, e);
@@ -208,23 +156,10 @@ public class B2LargeFileStorer implements B2FileStorer {
                 throw new B2LocalException("trouble", "exception while trying to upload parts: " + cause, cause);
             }
         } finally {
-            // we've either called get() on all of the futures, or we've hit an exception and
-            // we aren't going to wait for the others.  let's call cancel on all of them.
-            // the ones that have finished already won't mind and the others will be stopped.
-            for (Future<B2Part> future : partFutures) {
-                future.cancel(true);
-            }
+            // we've hit an exception and we aren't going to wait.
+            partFuture.cancel(true);
         }
-
-        // finish the large file.
-        B2FinishLargeFileRequest finishRequest = B2FinishLargeFileRequest
-                .builder(largeFileVersion.getFileId(), partSha1s)
-                .build();
-        return retryer.doRetry(
-                "b2_finish_large_file",
-                accountAuthCache,
-                () -> webifier.finishLargeFile(accountAuthCache.get(), finishRequest),
-                retryPolicySupplier.get());
+        return partSha1;
     }
 
     public void updateProgress(
@@ -237,8 +172,8 @@ public class B2LargeFileStorer implements B2FileStorer {
         uploadListener.progress(
                 new B2UploadProgress(
                         partNumber - 1,
-                        partStorers.size(),
-                        getStartByteOrUnknown(partNumber),
+                        partStorer.getPartNumber(),
+                        getStartByteOrUnknown(),
                         partLength,
                         bytesSoFar,
                         uploadState));
@@ -263,8 +198,8 @@ public class B2LargeFileStorer implements B2FileStorer {
         final B2ByteProgressListener progressAdapter = new B2UploadProgressAdapter(
                 uploadListener,
                 partNumber - 1,
-                partStorers.size(),
-                getStartByteOrUnknown(partNumber),
+                partStorer.getPartNumber(),
+                getStartByteOrUnknown(),
                 contentSource.getContentLength());
         final B2ByteProgressFilteringListener progressListener = new B2ByteProgressFilteringListener(progressAdapter);
 
@@ -318,7 +253,7 @@ public class B2LargeFileStorer implements B2FileStorer {
 
     /**
      * Stores a part by copying from a file that is already stored in a bucket.
-     *
+     * <p>
      * We do not know the true size of the part until it is finally stored. Some
      * copy operations do not provide a byte range being copied, and byte ranges
      * can be clamped down if they exceed the bounds of the file. Therefore, we

@@ -39,7 +39,7 @@ public class B2AlreadyStoredPartStorer implements B2PartStorer {
 
     @Override
     public B2Part storePart(
-            B2LargeFileStorer largeFileCreationManager,
+            B2FileStorer largeFileCreationManager,
             B2UploadListener uploadListener) {
 
         largeFileCreationManager.updateProgress(
